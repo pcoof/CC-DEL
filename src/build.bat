@@ -10,6 +10,14 @@ cd /d "%~dp0"
 if not exist CC-DEL.ps1 goto noscript
 if not exist launcher.go goto noscript
 
+rem --- 护栏：src 只能有一个 .syso ---
+rem 每个 .syso 都会带一个 .rsrc 段，链接器只接受一个；
+rem 多一个就报 "too many .rsrc sections"，然后很容易退回去用单文件模式编译，
+rem 结果得到一个既没图标、又带控制台黑窗的 exe。
+set "SYSO_COUNT=0"
+for %%F in (*.syso) do set /a SYSO_COUNT+=1
+if %SYSO_COUNT% GTR 1 goto toomany
+
 rem --- 找 windres：msys64 的两处常见位置，然后看 PATH ---
 set "WR="
 if exist "C:\msys64\usr\bin\windres.exe"        goto use_msys
@@ -59,6 +67,12 @@ exit /b 0
 
 :fail
 echo [失败] go build 未通过，请检查上面的报错
+exit /b 1
+
+:toomany
+echo [错误] 当前目录有 %SYSO_COUNT% 个 .syso 文件：每个 .syso 都带一个 .rsrc 段，
+echo        链接器只接受一个，多出来的会让构建报 "too many .rsrc sections"。
+echo        请只保留 rsrc.syso，删掉其余（例如 rsrc0.syso 这种备份副本）再重试。
 exit /b 1
 
 :noscript

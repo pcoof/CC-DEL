@@ -3,6 +3,10 @@
 *.exe
 *.dll
 
+# 资源对象：只允许 rsrc.syso 入库（多一个就报 too many .rsrc sections）
+/src/*.syso
+!/src/rsrc.syso
+
 # 运行时产物
 *.log
 queue.txt

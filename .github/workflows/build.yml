@@ -52,6 +52,17 @@ jobs:
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "版本：$v"
 
+      - name: 检查资源文件
+        shell: pwsh
+        run: |
+          # 每个 .syso 都带一个 .rsrc 段，多一个就会报 "too many .rsrc sections"
+          $syso = @(Get-ChildItem src -Filter *.syso)
+          if ($syso.Count -ne 1) {
+            throw "src 目录应恰好有 1 个 .syso，实际 $($syso.Count) 个：$(($syso.Name) -join ', ')"
+          }
+          Write-Host "资源文件：$($syso[0].Name)（$($syso[0].Length) 字节）"
+          if (-not (Test-Path src/logo.ico)) { throw "缺少 src/logo.ico" }
+
       - name: 编译
         working-directory: src
         shell: pwsh
@@ -60,6 +71,13 @@ jobs:
           go build -trimpath -ldflags "-H windowsgui -s -w -X main.version=${{ steps.ver.outputs.version }}" -o ../CC-DEL.exe .
           if ($LASTEXITCODE -ne 0) { throw "编译失败" }
           Get-Item ../CC-DEL.exe | ForEach-Object { Write-Host ("产物 " + $_.Length + " 字节") }
+
+      # 编出一个没图标的 exe 是最容易悄悄发生的事（单文件模式就不链接 syso），这里卡一道
+      - name: 校验 exe 带图标
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tools/check-icon.ps1 -Exe CC-DEL.exe
+          if ($LASTEXITCODE -ne 0) { throw "exe 缺少图标资源" }
 
       # 19 项回归测试：能算通过，才谈得上"能用"
       - name: 自检

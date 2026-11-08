@@ -5,7 +5,7 @@
 <h1 align="center">CC-DEL</h1>
 
 <p align="center">
-  <strong>Windows 强制删除工具 · 单文件 · 免安装 · 不弹黑窗</strong>
+  <strong>Windows 强制删除工具 · 单文件 · 免安装</strong>
 </p>
 
 <p align="center">
@@ -156,7 +156,41 @@ go build -trimpath -ldflags "-H windowsgui -s -w" -o ..\CC-DEL.exe .
 ```
 
 > `-H windowsgui` 去掉控制台子系统，启动全程不闪黑窗。
-> 必须用**包模式** `go build .`——单文件模式会忽略 `rsrc.syso`，图标就进不去。
+> 必须用**包模式** `go build .`——单文件模式（`go build launcher.go`）会忽略 `rsrc.syso`，
+> 编出来的 exe **既没有图标、又会带一个控制台黑窗**，而且不报任何错。
+>
+> 另外：`src/` 目录里只能有一个 `.syso`。每个 `.syso` 都带一个 `.rsrc` 段，
+> 多一个（比如备份的 `rsrc0.syso`）就会报 `too many .rsrc sections` 直接编不过。
+
+### 换图标
+
+`logo.ico` 里备了 16 / 32 / 48 三个尺寸——**不能只放一个 256×256**：
+资源管理器列表视图、标题栏、任务栏都用小尺寸，只给大图系统会自己缩，糊得厉害，
+个别位置干脆显示空白。
+
+有 PNG 设计稿就用脚本转：
+
+```powershell
+pwsh -File tools/make-ico.ps1 -Png my-logo.png -Out src/logo.ico
+cd src
+windres -O coff -F pe-x86-64 -o rsrc.syso rsrc.rc   # 换了 ico 必须重编资源
+build.bat
+```
+
+脚本一次生成 16/24/32/48/64/128/256 七档（256 用 PNG 压缩，其余用 BMP），
+`tools/check-ico.ps1` 可以回读检查每一档是不是都在。
+
+编完想确认图标真进 exe 了：
+
+```powershell
+pwsh -File tools/check-icon.ps1 -Exe CC-DEL.exe
+# RT_GROUP_ICON（图标组）: 1
+# 子系统: Windows GUI（不弹控制台）
+# 结论: 图标资源正常
+```
+
+它会同时看 PE 里的 `RT_GROUP_ICON` 和子系统标记——「没图标」和「带黑窗」这两个症状
+都能一次性查出来。
 
 ### 目录结构
 
@@ -170,7 +204,9 @@ CC-DEL/
 │   ├── rsrc.syso       预编译的 COFF 资源（让 CI 不需要 windres）
 │   └── build.bat       本地一键构建
 ├── tools/
-│   └── screenshot.ps1  生成 README 截图
+│   ├── screenshot.ps1  生成 README 截图
+│   ├── make-ico.ps1    PNG → 多尺寸 ico
+│   └── check-icon.ps1  检查 exe 的图标资源与子系统（防「没图标 / 带黑窗」）
 ├── docs/
 │   ├── logo.png
 │   └── screenshot.png
@@ -209,6 +245,18 @@ Go 宿主负责三件事：
 
 **在别的机器上能用吗？**
 Windows 10 / 11 64 位，只需系统自带的 Windows PowerShell 5.1。
+
+**自己编出来的 exe 没有图标，还带个黑窗？**
+两个症状一个原因：用了单文件模式 `go build launcher.go`。那种编法**不会**链接
+`rsrc.syso`（图标进不去），也**不会**带上 `-H windowsgui`（于是有控制台）。
+用 `cd src` + `build.bat`，或者照上面「手动构建」那两行敲。
+
+如果 `go build .` 直接报 `too many .rsrc sections`：`src/` 里躺了不止一个 `.syso`，
+把备份的那份删掉，只留 `rsrc.syso`。
+
+**图标换了但 exe 上没变？**
+`rsrc.syso` 是 `logo.ico` 的预编译副本，改 ico 之后必须重新跑一次 `windres`，
+否则 exe 里还是旧图标。`build.bat` 在有 windres 时会自动重编。
 
 ## 免责声明
 
