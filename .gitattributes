@@ -1,0 +1,15 @@
+# 统一换行，避免 Windows 与 CI 之间反复产生整文件 diff
+* text=auto
+
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.go    text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+
+# 二进制：不要做任何换行/文本处理
+*.ico   binary
+*.syso  binary
+*.png   binary
+*.exe   binary
