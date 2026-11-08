@@ -187,33 +187,70 @@ jobs:
         id: tag
         shell: pwsh
         run: |
+          # git 输出 UTF-8，而 Windows 控制台默认按本地代码页（936/437）解码，
+          # 不先改成 UTF-8，提交信息里的中文进 Release 说明就是乱码，还会吃掉半个字。
+          [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+          $OutputEncoding = [Console]::OutputEncoding
+
           $ver = "${{ needs.windows.outputs.version }}"
           $tag = "v$ver"
-          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+          $skipCheck = ($env:GITHUB_REF -like 'refs/tags/v*')
+
+          if ($skipCheck) {
             # 本次就是 tag 推送，tag 已经在远端了，直接拿它发 Release
             Write-Host "本次为 tag 推送，直接发布 $tag"
-            "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            "create=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            exit 0
+          } else {
+            # 重跑同一个 workflow 时算出的版本可能已经打过了：
+            # 那种情况不重复发 Release，免得同一版本出现两份。
+            $exists = git ls-remote --tags --refs origin "refs/tags/$tag"
+            if ($exists) {
+              Write-Host "::warning::$tag 已存在，跳过发布（重跑任务或版本号撞了）"
+              "create=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+              exit 0
+            }
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a $tag -m "CC-DEL $ver"
+            git push origin "refs/tags/$tag"
+            # 用 GITHUB_TOKEN 推的 tag 不会再次触发本 workflow，所以不会自己套娃
+            Write-Host "已推送 tag $tag"
           }
 
-          # 重跑同一个 workflow 时 RUN 号不变，算出来的版本可能已经打过了：
-          # 那种情况不重复发 Release，免得同一版本出现两份。
-          $exists = git ls-remote --tags --refs origin "refs/tags/$tag"
-          if ($exists) {
-            Write-Host "::warning::$tag 已存在，跳过发布（重跑任务或版本号撞了）"
-            "create=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-            exit 0
+          # ---- 生成发布说明 ----
+          # GitHub 自带的 generate_release_notes 只按 PR 归类，本项目直接推 main，
+          # 拿到的会是一张空白页；所以自己按「上一个 tag → 本次」列提交。
+          $prev = $null
+          foreach ($t in (git tag -l 'v*' --sort=-v:refname)) {
+            if ($t -eq $tag) { continue }
+            git merge-base --is-ancestor $t HEAD 2>$null
+            if ($LASTEXITCODE -eq 0) { $prev = $t; break }
+          }
+          $range = if ($prev) { "$prev..HEAD" } else { 'HEAD' }
+          $commits = @(git log --no-merges --pretty=format:'- %s（%h）' $range)
+          if ($commits.Count -eq 0) { $commits = @('- 仅构建配置调整') }
+
+          $size = [math]::Round((Get-Item dist/CC-DEL.exe).Length / 1MB, 1)
+          $lines = @(
+            '全部质量门通过：脚本语法 → 资源文件 → 编译 → 图标与子系统校验 → 19 项自检。',
+            '',
+            '### 本次变更'
+          )
+          $lines += $commits
+          $lines += ''
+          $lines += "### 下载"
+          $lines += "``CC-DEL.exe``（单文件，$size MB，免安装，不弹控制台）"
+          if ($prev) {
+            $lines += ''
+            $lines += "**完整对比**：https://github.com/$env:GITHUB_REPOSITORY/compare/$prev...$tag"
           }
 
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag -a $tag -m "CC-DEL $ver"
-          git push origin "refs/tags/$tag"
-          # 用 GITHUB_TOKEN 推的 tag 不会再次触发本 workflow，所以不会自己套娃
-          Write-Host "已推送 tag $tag"
           "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "create=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          # 多行输出必须用 delimiter 写法，直接写 key=value 会被截成第一行
+          "body<<RELEASE_BODY_EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $lines | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "RELEASE_BODY_EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host ($lines -join "`n")
 
       - name: 发布 Release
         if: steps.tag.outputs.create == 'true'
@@ -221,6 +258,7 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: CC-DEL ${{ needs.windows.outputs.version }}
+          body: ${{ steps.tag.outputs.body }}
           files: dist/CC-DEL.exe
           fail_on_unmatched_files: true
-          generate_release_notes: true
+
