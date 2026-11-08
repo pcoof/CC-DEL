@@ -164,20 +164,35 @@ go build -trimpath -ldflags "-H windowsgui -s -w" -o ..\CC-DEL.exe .
 
 ### 换图标
 
-`logo.ico` 里备了 16 / 32 / 48 三个尺寸——**不能只放一个 256×256**：
-资源管理器列表视图、标题栏、任务栏都用小尺寸，只给大图系统会自己缩，糊得厉害，
-个别位置干脆显示空白。
+当前图标直接取自系统自带的 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`，
+**原始 8 帧**（16 / 20 / 24 / 32 / 40 / 48 / 64 / 256）原样搬过来，没有重绘、没有缩放，
+所以每种视图尺寸都是原生像素。
 
-有 PNG 设计稿就用脚本转：
+`logo.ico` 里**不能只放一个 256×256**：资源管理器列表视图、标题栏、任务栏都用小尺寸，
+只给大图系统会自己缩，糊得厉害，个别位置干脆显示空白。
+
+借别的程序的图标（不缩放、逐帧搬）：
+
+```powershell
+pwsh -File tools/export-ico.ps1 -Source C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -List
+pwsh -File tools/export-ico.ps1 -Source ...\powershell.exe -Out src\logo.ico
+```
+
+有自己的 PNG 设计稿就用：
 
 ```powershell
 pwsh -File tools/make-ico.ps1 -Png my-logo.png -Out src/logo.ico
+```
+
+两条路都要再重编一次资源：
+
+```powershell
 cd src
 windres -O coff -F pe-x86-64 -o rsrc.syso rsrc.rc   # 换了 ico 必须重编资源
 build.bat
 ```
 
-脚本一次生成 16/24/32/48/64/128/256 七档（256 用 PNG 压缩，其余用 BMP），
+`make-ico.ps1` 生成 16/24/32/48/64/128/256 七档（256 用 PNG 压缩，其余用 BMP），
 `tools/check-ico.ps1` 可以回读检查每一档是不是都在。
 
 编完想确认图标真进 exe 了：
@@ -206,6 +221,7 @@ CC-DEL/
 ├── tools/
 │   ├── screenshot.ps1  生成 README 截图
 │   ├── make-ico.ps1    PNG → 多尺寸 ico
+│   ├── export-ico.ps1  从任意 exe/dll 逐帧搬图标（不缩放）
 │   └── check-icon.ps1  检查 exe 的图标资源与子系统（防「没图标 / 带黑窗」）
 ├── docs/
 │   ├── logo.png
@@ -257,6 +273,21 @@ Windows 10 / 11 64 位，只需系统自带的 Windows PowerShell 5.1。
 **图标换了但 exe 上没变？**
 `rsrc.syso` 是 `logo.ico` 的预编译副本，改 ico 之后必须重新跑一次 `windres`，
 否则 exe 里还是旧图标。`build.bat` 在有 windres 时会自动重编。
+
+**exe 改了个名字，图标就没了？**
+图标在 PE 资源里，改名动不了它——先确认资源还在：
+
+```powershell
+pwsh -File tools/check-icon.ps1 -Exe CC-DEL0.exe   # RT_GROUP_ICON: 1 就说明图标在
+```
+
+资源在、显示不出来，就是资源管理器的图标缓存（`iconcache_*.db`）过期了。刷一次：
+
+```powershell
+ie4uinit.exe -show          # 重建图标缓存，不用重启资源管理器
+```
+
+顺手把文件挪到别的文件夹再看一眼，也能立刻区分「真没图标」和「缓存撒谎」。
 
 ## 免责声明
 
