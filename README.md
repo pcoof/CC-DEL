@@ -5,9 +5,10 @@
 <h1 align="center">CC-DEL</h1>
 
 <p align="center">
-  <strong>Windows 强制删除工具 · 单文件 · 免安装</strong>
+  <strong>Windows10/11 强制删除工具 · 单文件 · 免安装</strong>
+  ，使用AI 生成的 PowerShell + WinForms脚本文件，然后用GO打包成exe文件，其实直接使用ps1的文件就行才几十KB。
 </p>
-
+<br>
 <p align="center">
   先把占用者找出来，再动手删。<br>
   删不掉的文件，九成不是「没有权限」，<br>
@@ -198,49 +199,6 @@ publish：计算版本号 → 打 annotated tag（如 v20261108.0）→ 推送 t
 
 > 一次推送一个版本，意味着 README 改个错字也会出一版。嫌吵的话可以把 `publish` 的
 > `if` 加一条 `paths` 判断，只让 `src/**` 的改动触发发布。
-
-### 换图标
-
-图标就是 `src/logo.ico` 这一个文件。**必须多尺寸**：资源管理器的列表 / 中图标、标题栏、
-任务栏取的都是 16 ~ 48 这一档，只塞一张 256×256 进去，系统只能自己缩，糊得厉害，
-个别位置干脆显示空白。
-
-当前这份是从系统 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` 里
-**原样取出来的 8 帧**（16 / 20 / 24 / 32 / 40 / 48 / 64 / 256，全 32bpp），
-没有重绘、没有缩放，所以每种尺寸都是原生像素。
-
-换成自己的图，先准备一个多尺寸 ico，两种做法：
-
-- **有 PNG 设计稿** —— ImageMagick 一行转出 7 档：
-
-  ```bat
-  magick logo.png -define icon:auto-resize=256,128,64,48,32,24,16 logo.ico
-  ```
-
-  没有 ImageMagick 也行，任何支持多尺寸导出的 ico 工具都可以（比如 IcoFX、在线转换站）。
-
-- **想借某个 exe / dll 的图标** —— 用 [Resource Hacker](https://www.angusj.com/resourcehacker/)
-  打开它，在 Icon Group 上右键 `Save *.ico resources`，**导整个组**而不是单帧。
-
-拿到 ico 之后：
-
-```bat
-copy /y your-logo.ico src\logo.ico
-cd src
-rem 换了 ico 必须重编资源，否则 exe 里还是旧图标
-windres -O coff -F pe-x86-64 -o rsrc.syso rsrc.rc
-build.bat
-```
-
-> `rsrc.syso` 是 `logo.ico` 的预编译副本（提交进仓库是为了让 CI 不用装 windres）。
-> 漏掉 `windres` 这一步，exe 里还是旧图标——这是最常见的「换了没生效」。
-
-验证：双击跑起来看标题栏和任务栏，或者把 exe 丢进资源管理器来回切几档图标大小看有没有糊。
-**如果只有资源管理器里没变**，那是图标缓存过期，不是没编进去：
-
-```bat
-ie4uinit.exe -show
-```
 
 ### 目录结构
 
