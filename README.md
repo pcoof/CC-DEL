@@ -67,11 +67,12 @@ CC-DEL 会遍历所有进程的**模块列表**，把「谁把它加载进去了
 
 ### 1. 下载
 
-到 [Releases](https://github.com/pcoof/CC-DEL/releases) 下载 `CC-DEL.exe`，放到任意目录，双击即可。
+到 [Releases](https://github.com/pcoof/CC-DEL/releases) 下载最新的 `CC-DEL.exe`，放到任意目录，
+双击即可。版本号形如 `v20261108.0`（日期 + 当天第几个构建）。
 
-> 还没发 Release 时，去 [Actions](https://github.com/pcoof/CC-DEL/actions/workflows/build.yml)
-> 点最新一次成功的构建，页面底部 Artifacts 里下载 `CC-DEL-<版本>-windows-x64.zip`，
-> 解压出来同样是 `CC-DEL.exe`。
+> 每次推送只要质量门全过，Actions 就自动打 tag、发 Release，不用手动操作。
+> 万一 Release 页还没刷新出来，去 [Actions](https://github.com/pcoof/CC-DEL/actions/workflows/build.yml)
+> 点最新一次成功的构建，底部 Artifacts 里同样能下到 `CC-DEL-<版本>-windows-x64.zip`。
 
 单文件、免安装、不需要 .NET 运行时——脚本和图标都内嵌在 exe 里，首次运行会释放到
 `%LOCALAPPDATA%\CC-DEL\`，之后复用。
@@ -166,7 +167,7 @@ go build -trimpath -ldflags "-H windowsgui -s -w" -o ..\CC-DEL.exe .
 > 另外：`src/` 目录里只能有一个 `.syso`。每个 `.syso` 都带一个 `.rsrc` 段，
 > 多一个（比如备份的 `rsrc0.syso`）就会报 `too many .rsrc sections` 直接编不过。
 
-### 自动构建
+### 自动构建与发布
 
 推送到 `main` 或提 PR 时，Actions 会走一遍完整的质量门（`.github/workflows/build.yml`）：
 
@@ -175,11 +176,27 @@ go build -trimpath -ldflags "-H windowsgui -s -w" -o ..\CC-DEL.exe .
             → 校验 exe 里有图标 + 子系统是 GUI → 19 项自检 → 上传 artifact
 ```
 
-任何一环不过就红，不会产出「没图标」或「带黑窗」的 exe。打 `v*` tag 时额外把 exe 挂到 Release：
+任何一环不过就红，不会产出「没图标」或「带黑窗」的 exe。
 
-```bat
-git tag v1.0.0 && git push origin v1.0.0
+**全过之后自动发版**，不需要手动敲 tag：
+
+```text
+publish：计算版本号 → 打 annotated tag（如 v20261108.0）→ 推送 tag → 建 Release 并挂上 CC-DEL.exe
 ```
+
+版本号规则是 `日期.当天序号`，当天第一个构建是 `.0`，之后递增；同一天的多次运行会被
+`concurrency` 串行化，不会抢到同一个号。Release 说明由 GitHub 按提交历史自动生成。
+
+几个刻意的取舍：
+
+- **PR 不发版**，只有 `main` 上的提交才打 tag。
+- **重复运行不会出现第二个同名版本**：tag 已存在就跳过发布并留一条 warning
+  （重跑同一个 workflow 时版本号不变，这条判断就是防它）。
+- **tag 用 `GITHUB_TOKEN` 推**，这种推送不会再次触发 workflow，所以不会自己套娃。
+- 手动打 `v*` tag 依然有效——推 tag 会跑一次构建，然后为这个 tag 补发 Release。
+
+> 一次推送一个版本，意味着 README 改个错字也会出一版。嫌吵的话可以把 `publish` 的
+> `if` 加一条 `paths` 判断，只让 `src/**` 的改动触发发布。
 
 ### 换图标
 
@@ -276,6 +293,18 @@ Go 宿主负责三件事：
 
 **在别的机器上能用吗？**
 Windows 10 / 11 64 位，只需系统自带的 Windows PowerShell 5.1。
+
+**Release 的版本号谁定的？**
+Actions 自动定：`日期.当天序号`，例如 `v20261108.0`。当天第一个成功的构建是 `.0`，
+之后递增——序号取自当天已有的 tag，所以不用你手动算，也不会重复。
+
+**发出去发现有 bug，想撤回这个版本？**
+删 Release 和 tag 就行，下一个构建会拿到更大的序号，不会复用已删掉的号：
+
+```bat
+gh release delete v20261108.0 --yes
+git push origin :refs/tags/v20261108.0
+```
 
 **自己编出来的 exe 没有图标，还带个黑窗？**
 两个症状一个原因：用了单文件模式 `go build launcher.go`。那种编法**不会**链接

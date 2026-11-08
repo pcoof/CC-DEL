@@ -10,15 +10,17 @@ on:
 permissions:
   contents: write
 
-# 同一分支连续推送时，取消还没跑完的旧运行，省额度也省等待
 concurrency:
+  # PR 连推时取消旧运行省额度；main 上不取消——跑到一半被掐掉会留下「有 tag 没 Release」
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows:
     name: 构建 CC-DEL.exe
     runs-on: windows-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
 
     steps:
       - name: 检出源码
@@ -45,14 +47,25 @@ jobs:
           }
           Write-Host '语法检查通过'
 
+      # 版本号：tag 推送用 tag 本身；否则「日期.当天第几个」——同一天第一次是 .0
       - name: 计算版本号
         id: ver
         shell: pwsh
         run: |
           if ($env:GITHUB_REF -like 'refs/tags/v*') {
-            $v = $env:GITHUB_REF_NAME.TrimStart('v')
+            $v = $env:GITHUB_REF_NAME.Substring(1)
+            Write-Host "tag 推送，直接用 tag 版本"
           } else {
-            $v = (Get-Date -Format 'yyyyMMdd') + '.' + $env:GITHUB_RUN_NUMBER
+            $date = Get-Date -Format 'yyyyMMdd'
+            # 当天已有的 tag 决定下一个序号。同分支的多次运行被 concurrency 串行化，
+            # 所以不会出现两次运行抢到同一个号。
+            $nums = @()
+            foreach ($line in (git ls-remote --tags --refs origin "refs/tags/v$date.*" 2>$null)) {
+              if ($line -match "/v$date\.(\d+)$") { $nums += [int]$Matches[1] }
+            }
+            $n = 0
+            if ($nums.Count -gt 0) { $n = ($nums | Measure-Object -Maximum).Maximum + 1 }
+            $v = "$date.$n"
           }
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "版本：$v"
@@ -146,9 +159,68 @@ jobs:
           path: CC-DEL.exe
           if-no-files-found: error
 
+  # 构建通过就自动打 tag 发 Release：main 上每个通过的提交一个版本，不用手动敲 tag
+  publish:
+    name: 打 tag 并发布
+    needs: windows
+    # PR 不发布；tag 推送（别人手动打的）也补发一次 Release；构建没过就不碰
+    if: |
+      needs.windows.result == 'success' &&
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' ||
+       startsWith(github.ref, 'refs/tags/v'))
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出源码
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: 下载构建产物
+        uses: actions/download-artifact@v8
+        with:
+          name: CC-DEL-${{ needs.windows.outputs.version }}-windows-x64
+          path: dist
+
+      - name: 打 tag
+        id: tag
+        shell: pwsh
+        run: |
+          $ver = "${{ needs.windows.outputs.version }}"
+          $tag = "v$ver"
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            # 本次就是 tag 推送，tag 已经在远端了，直接拿它发 Release
+            Write-Host "本次为 tag 推送，直接发布 $tag"
+            "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "create=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+
+          # 重跑同一个 workflow 时 RUN 号不变，算出来的版本可能已经打过了：
+          # 那种情况不重复发 Release，免得同一版本出现两份。
+          $exists = git ls-remote --tags --refs origin "refs/tags/$tag"
+          if ($exists) {
+            Write-Host "::warning::$tag 已存在，跳过发布（重跑任务或版本号撞了）"
+            "create=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a $tag -m "CC-DEL $ver"
+          git push origin "refs/tags/$tag"
+          # 用 GITHUB_TOKEN 推的 tag 不会再次触发本 workflow，所以不会自己套娃
+          Write-Host "已推送 tag $tag"
+          "tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "create=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: 发布 Release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: steps.tag.outputs.create == 'true'
         uses: softprops/action-gh-release@v2
         with:
-          files: CC-DEL.exe
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: CC-DEL ${{ needs.windows.outputs.version }}
+          files: dist/CC-DEL.exe
+          fail_on_unmatched_files: true
           generate_release_notes: true
