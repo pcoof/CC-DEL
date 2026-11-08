@@ -10,6 +10,11 @@ on:
 permissions:
   contents: write
 
+# 同一分支连续推送时，取消还没跑完的旧运行，省额度也省等待
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   windows:
     name: 构建 CC-DEL.exe
@@ -17,10 +22,10 @@ jobs:
 
     steps:
       - name: 检出源码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 安装 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version: '1.22'
           cache-dependency-path: src/go.mod
@@ -72,12 +77,59 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "编译失败" }
           Get-Item ../CC-DEL.exe | ForEach-Object { Write-Host ("产物 " + $_.Length + " 字节") }
 
-      # 编出一个没图标的 exe 是最容易悄悄发生的事（单文件模式就不链接 syso），这里卡一道
-      - name: 校验 exe 带图标
+      # 编出一个没图标、或者带控制台黑窗的 exe，是这里最容易悄悄发生的事，卡一道
+      - name: 校验图标与子系统
         shell: pwsh
         run: |
-          pwsh -NoProfile -File tools/check-icon.ps1 -Exe CC-DEL.exe
-          if ($LASTEXITCODE -ne 0) { throw "exe 缺少图标资源" }
+          # 不用 ExtractAssociatedIcon：图标缺失时它照样返回一个"通用程序图标"，看着有值。
+          # 直接数 PE 资源目录里的 RT_GROUP_ICON(14) / RT_ICON(3)，再读 PE 头的 Subsystem。
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class PeRes
+          {
+              [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+              private static extern IntPtr LoadLibraryExW(string f, IntPtr r, uint flags);
+              private delegate bool EnumProc(IntPtr h, IntPtr t, IntPtr n, IntPtr p);
+              [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+              private static extern bool EnumResourceNamesW(IntPtr h, IntPtr type, EnumProc cb, IntPtr p);
+              public static int Count(string path, int type)
+              {
+                  IntPtr h = LoadLibraryExW(path, IntPtr.Zero, 2);
+                  if (h == IntPtr.Zero) return -1;
+                  int n = 0;
+                  EnumResourceNamesW(h, (IntPtr)type, delegate (IntPtr a, IntPtr b, IntPtr c, IntPtr d)
+                  {
+                      n++;
+                      return true;
+                  }, IntPtr.Zero);
+                  return n;
+              }
+          }
+          '@
+
+          $exe = Join-Path $PWD 'CC-DEL.exe'
+          $groups = [PeRes]::Count($exe, 14)
+          $frames = [PeRes]::Count($exe, 3)
+          Write-Host "RT_GROUP_ICON=$groups  RT_ICON=$frames"
+          if ($groups -lt 1) {
+            throw "exe 里没有图标资源：rsrc.syso 没参与链接（是不是退回去用了单文件模式 go build launcher.go？）"
+          }
+          if ($frames -lt 3) {
+            throw "图标只有 $frames 帧：ico 里必须有多尺寸，否则小图标会被缩糊"
+          }
+
+          $fs = [System.IO.File]::OpenRead($exe)
+          try {
+            $br = New-Object System.IO.BinaryReader($fs)
+            $fs.Position = 0x3C
+            $pe = $br.ReadInt32()
+            $fs.Position = $pe + 0x5C
+            $sub = $br.ReadUInt16()
+          } finally { $fs.Dispose() }
+          $subText = if ($sub -eq 2) { 'Windows GUI' } elseif ($sub -eq 3) { 'Console' } else { "未知($sub)" }
+          Write-Host "子系统：$subText"
+          if ($sub -ne 2) { throw "子系统不是 GUI（$subText）：编译时漏了 -H windowsgui，双击会带黑窗" }
 
       # 19 项回归测试：能算通过，才谈得上"能用"
       - name: 自检
@@ -88,7 +140,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "自检未通过（退出码 $LASTEXITCODE）" }
 
       - name: 上传构建产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: CC-DEL-${{ steps.ver.outputs.version }}-windows-x64
           path: CC-DEL.exe

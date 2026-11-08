@@ -69,6 +69,10 @@ CC-DEL 会遍历所有进程的**模块列表**，把「谁把它加载进去了
 
 到 [Releases](https://github.com/pcoof/CC-DEL/releases) 下载 `CC-DEL.exe`，放到任意目录，双击即可。
 
+> 还没发 Release 时，去 [Actions](https://github.com/pcoof/CC-DEL/actions/workflows/build.yml)
+> 点最新一次成功的构建，页面底部 Artifacts 里下载 `CC-DEL-<版本>-windows-x64.zip`，
+> 解压出来同样是 `CC-DEL.exe`。
+
 单文件、免安装、不需要 .NET 运行时——脚本和图标都内嵌在 exe 里，首次运行会释放到
 `%LOCALAPPDATA%\CC-DEL\`，之后复用。
 
@@ -146,7 +150,7 @@ cd src
 build.bat
 ```
 
-产物：仓库根目录的 `CC-DEL.exe`（约 2.1 MB）。
+产物：仓库根目录的 `CC-DEL.exe`（约 2.2 MB，其中脚本和图标都是内嵌的）。
 
 手动构建：
 
@@ -162,50 +166,63 @@ go build -trimpath -ldflags "-H windowsgui -s -w" -o ..\CC-DEL.exe .
 > 另外：`src/` 目录里只能有一个 `.syso`。每个 `.syso` 都带一个 `.rsrc` 段，
 > 多一个（比如备份的 `rsrc0.syso`）就会报 `too many .rsrc sections` 直接编不过。
 
+### 自动构建
+
+推送到 `main` 或提 PR 时，Actions 会走一遍完整的质量门（`.github/workflows/build.yml`）：
+
+```text
+脚本语法检查 → 资源文件检查（必须恰好 1 个 .syso）→ go build
+            → 校验 exe 里有图标 + 子系统是 GUI → 19 项自检 → 上传 artifact
+```
+
+任何一环不过就红，不会产出「没图标」或「带黑窗」的 exe。打 `v*` tag 时额外把 exe 挂到 Release：
+
+```bat
+git tag v1.0.0 && git push origin v1.0.0
+```
+
 ### 换图标
 
-当前图标直接取自系统自带的 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`，
-**原始 8 帧**（16 / 20 / 24 / 32 / 40 / 48 / 64 / 256）原样搬过来，没有重绘、没有缩放，
-所以每种视图尺寸都是原生像素。
+图标就是 `src/logo.ico` 这一个文件。**必须多尺寸**：资源管理器的列表 / 中图标、标题栏、
+任务栏取的都是 16 ~ 48 这一档，只塞一张 256×256 进去，系统只能自己缩，糊得厉害，
+个别位置干脆显示空白。
 
-`logo.ico` 里**不能只放一个 256×256**：资源管理器列表视图、标题栏、任务栏都用小尺寸，
-只给大图系统会自己缩，糊得厉害，个别位置干脆显示空白。
+当前这份是从系统 `C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe` 里
+**原样取出来的 8 帧**（16 / 20 / 24 / 32 / 40 / 48 / 64 / 256，全 32bpp），
+没有重绘、没有缩放，所以每种尺寸都是原生像素。
 
-借别的程序的图标（不缩放、逐帧搬）：
+换成自己的图，先准备一个多尺寸 ico，两种做法：
 
-```powershell
-pwsh -File tools/export-ico.ps1 -Source C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -List
-pwsh -File tools/export-ico.ps1 -Source ...\powershell.exe -Out src\logo.ico
-```
+- **有 PNG 设计稿** —— ImageMagick 一行转出 7 档：
 
-有自己的 PNG 设计稿就用：
+  ```bat
+  magick logo.png -define icon:auto-resize=256,128,64,48,32,24,16 logo.ico
+  ```
 
-```powershell
-pwsh -File tools/make-ico.ps1 -Png my-logo.png -Out src/logo.ico
-```
+  没有 ImageMagick 也行，任何支持多尺寸导出的 ico 工具都可以（比如 IcoFX、在线转换站）。
 
-两条路都要再重编一次资源：
+- **想借某个 exe / dll 的图标** —— 用 [Resource Hacker](https://www.angusj.com/resourcehacker/)
+  打开它，在 Icon Group 上右键 `Save *.ico resources`，**导整个组**而不是单帧。
 
-```powershell
+拿到 ico 之后：
+
+```bat
+copy /y your-logo.ico src\logo.ico
 cd src
-windres -O coff -F pe-x86-64 -o rsrc.syso rsrc.rc   # 换了 ico 必须重编资源
+rem 换了 ico 必须重编资源，否则 exe 里还是旧图标
+windres -O coff -F pe-x86-64 -o rsrc.syso rsrc.rc
 build.bat
 ```
 
-`make-ico.ps1` 生成 16/24/32/48/64/128/256 七档（256 用 PNG 压缩，其余用 BMP），
-`tools/check-ico.ps1` 可以回读检查每一档是不是都在。
+> `rsrc.syso` 是 `logo.ico` 的预编译副本（提交进仓库是为了让 CI 不用装 windres）。
+> 漏掉 `windres` 这一步，exe 里还是旧图标——这是最常见的「换了没生效」。
 
-编完想确认图标真进 exe 了：
+验证：双击跑起来看标题栏和任务栏，或者把 exe 丢进资源管理器来回切几档图标大小看有没有糊。
+**如果只有资源管理器里没变**，那是图标缓存过期，不是没编进去：
 
-```powershell
-pwsh -File tools/check-icon.ps1 -Exe CC-DEL.exe
-# RT_GROUP_ICON（图标组）: 1
-# 子系统: Windows GUI（不弹控制台）
-# 结论: 图标资源正常
+```bat
+ie4uinit.exe -show
 ```
-
-它会同时看 PE 里的 `RT_GROUP_ICON` 和子系统标记——「没图标」和「带黑窗」这两个症状
-都能一次性查出来。
 
 ### 目录结构
 
@@ -214,20 +231,18 @@ CC-DEL/
 ├── src/
 │   ├── CC-DEL.ps1      PowerShell 5.1 + WinForms 主程序（界面 + 删除引擎）
 │   ├── launcher.go     Go 宿主：内嵌脚本/图标、无窗口启动、单实例、-Add 快速路径
-│   ├── logo.ico        程序与右键菜单图标
+│   ├── logo.ico        程序与右键菜单图标（多尺寸）
 │   ├── rsrc.rc         图标资源描述
 │   ├── rsrc.syso       预编译的 COFF 资源（让 CI 不需要 windres）
 │   └── build.bat       本地一键构建
-├── tools/
-│   ├── screenshot.ps1  生成 README 截图
-│   ├── make-ico.ps1    PNG → 多尺寸 ico
-│   ├── export-ico.ps1  从任意 exe/dll 逐帧搬图标（不缩放）
-│   └── check-icon.ps1  检查 exe 的图标资源与子系统（防「没图标 / 带黑窗」）
 ├── docs/
-│   ├── logo.png
-│   └── screenshot.png
+│   ├── logo.png        README 顶部图标
+│   └── screenshot.png  README 界面截图
 └── .github/workflows/build.yml
 ```
+
+仓库里只有源码和构建产物必需的资源，没有脚本工具：图标用现成的 ico 工具转，
+校验交给 CI。
 
 ### 为什么还要个 Go 宿主
 
@@ -275,19 +290,16 @@ Windows 10 / 11 64 位，只需系统自带的 Windows PowerShell 5.1。
 否则 exe 里还是旧图标。`build.bat` 在有 windres 时会自动重编。
 
 **exe 改了个名字，图标就没了？**
-图标在 PE 资源里，改名动不了它——先确认资源还在：
+图标在 PE 资源段里，改名碰不到它——所以先别急着重新编译。这种情况九成是资源管理器的
+图标缓存（`iconcache_*.db`）过期。刷一次：
 
-```powershell
-pwsh -File tools/check-icon.ps1 -Exe CC-DEL0.exe   # RT_GROUP_ICON: 1 就说明图标在
+```bat
+ie4uinit.exe -show
 ```
 
-资源在、显示不出来，就是资源管理器的图标缓存（`iconcache_*.db`）过期了。刷一次：
-
-```powershell
-ie4uinit.exe -show          # 重建图标缓存，不用重启资源管理器
-```
-
-顺手把文件挪到别的文件夹再看一眼，也能立刻区分「真没图标」和「缓存撒谎」。
+顺手把文件挪到别的文件夹再看一眼，就能立刻区分「真没图标」和「缓存撒谎」。
+真想确认资源在不在，跑一次 `build.bat` 看它有没有报错，或者用 Resource Hacker 打开 exe
+看 Icon 节点——比猜快。
 
 ## 免责声明
 
